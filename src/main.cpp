@@ -1,4 +1,3 @@
-// src/main.cpp
 #include "seecam.hpp"
 
 int main() {

@@ -1,4 +1,3 @@
-// src/seecam.cpp
 #include "seecam.hpp"
 
 double SeeCam::get_timestamp() {
@@ -40,10 +39,10 @@ bool SeeCam::load_config() {
         std::cout << "[ERROR] Failed to load config.cfg, using defaults" << std::endl;
         width = 640;
         height = 480;
-        quality = 100;
+        quality = 80; // Match Python's JPEG quality (80)
         show_frame = false;
-        zenoh_key = "seecam/image";
-        zenoh_port = 4556;
+        zenoh_key = "seecam/image"; // Match Python's key expression
+        zenoh_port = 4556; // Match Python's port
         return false;
     }
 
@@ -71,7 +70,7 @@ bool SeeCam::load_config() {
     try {
         quality = std::stoi(conf["compression_quality"]);
     } catch (...) {
-        quality = 100;
+        quality = 80; // Match Python's default
     }
     show_frame = (conf["SHOW_FRAME"] == "true");
     zenoh_key = conf.count("zenoh_key") ? conf["zenoh_key"] : "seecam/image";
@@ -91,7 +90,7 @@ cv::VideoCapture SeeCam::init_camera() {
     cv::VideoCapture c;
     if (use_gstreamer) {
         std::string gst_pipeline = "v4l2src device=/dev/video0 ! video/x-raw, width=" + std::to_string(width) +
-                                   ", height=" + std::to_string(height) + ", framerate=30/1 ! videoconvert ! appsink";
+                                  ", height=" + std::to_string(height) + ", framerate=30/1 ! videoconvert ! appsink";
         c.open(gst_pipeline, cv::CAP_GSTREAMER);
         if (c.isOpened()) {
             std::cout << "[INFO] Camera opened with GStreamer." << std::endl;
@@ -137,7 +136,7 @@ double SeeCam::get_memory_mb() {
     return 0.0;
 }
 
-SeeCam::SeeCam() : show_frame(false), width(640), height(480), quality(100), zenoh_port(4556), zenoh_key("seecam/image"), sequence(0) {
+SeeCam::SeeCam() : show_frame(false), width(640), height(480), quality(80), zenoh_port(4556), zenoh_key("seecam/image"), sequence(0), last_publish_time(0.0) {
     load_config();
     set_jetson_performance();
 
@@ -180,6 +179,10 @@ SeeCam::SeeCam() : show_frame(false), width(640), height(480), quality(100), zen
 SeeCam::~SeeCam() {
     cap.release();
     cv::destroyAllWindows();
+    if (session.has_value()) {
+        session.reset();
+        std::cout << "[INFO] Zenoh session closed" << std::endl;
+    }
 }
 
 void SeeCam::run() {
@@ -196,9 +199,15 @@ void SeeCam::run() {
             continue;
         }
 
+        // Optional cropping to match Python's im[80:-80, :, :] (crops top/bottom 80 rows)
+        // Uncomment to enable:
+        // if (frame.rows >= 160) {
+        //     frame = frame(cv::Rect(0, 80, frame.cols, frame.rows - 160));
+        // }
+
         if (frame.cols != width || frame.rows != height) {
             cv::resize(frame, frame, cv::Size(width, height));
-            cv::cvtColor(frame, frame, cv::COLOR_BGR2RGB);
+            cv::cvtColor(frame, frame, cv::COLOR_BGR2RGB); // Match Python's RGB format
             std::cout << "[INFO] Captured image size: " << frame.cols << "x" << frame.rows << std::endl;
         }
 
@@ -210,12 +219,19 @@ void SeeCam::run() {
             }
         }
 
+        double current_time = get_timestamp();
+        if (current_time - last_publish_time < publish_interval) {
+            continue; // Skip publishing until 100ms interval is reached
+        }
+        last_publish_time = current_time;
+
         auto encoded_image = encode_image(frame);
         if (encoded_image.empty()) continue;
 
-        double timestamp = get_timestamp();
+        double timestamp = current_time; // Match Python's timestamp
         uint32_t image_len = static_cast<uint32_t>(encoded_image.size());
 
+        // Construct message: sequence (uint32_t) + timestamp (double) + length (uint32_t) + image
         std::vector<uint8_t> message(sizeof(uint32_t) + sizeof(double) + sizeof(uint32_t) + image_len);
         uint8_t* ptr = message.data();
 

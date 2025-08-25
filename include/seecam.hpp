@@ -1,4 +1,3 @@
-// include/seecam.hpp
 #ifndef SEECAM_HPP
 #define SEECAM_HPP
 
@@ -29,6 +28,8 @@ private:
     int width, height, quality, zenoh_port;
     std::string zenoh_key;
     uint32_t sequence;
+    double last_publish_time; // Added for interval-based publishing
+    const double publish_interval = 0.1; // 100ms to match Python code
 
     double get_timestamp();
     std::string get_local_ip();
