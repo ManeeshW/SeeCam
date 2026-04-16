@@ -1,0 +1,13 @@
+{
+    "visualization_enabled": true,
+    "image_saving_enabled": true,
+    "event_name": "default_event",
+    "hdf5_dir_path": "image_hdf5",
+    "data_dir_path": "Data",
+    "image_resolution": {
+        "width": 640,
+        "height": 480
+    },
+    "compression_quality": 80,
+    "zenoh_port": 4556
+}
