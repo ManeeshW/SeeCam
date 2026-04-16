@@ -1,0 +1,12 @@
+syntax = "proto2";
+
+package fdcl2;
+
+message Data {
+  required bool system_on = 1;
+  optional int32 t_stamp_seconds = 2;
+  optional int32 t_stamp_nanos = 3;
+  optional float t_cam2 = 4;
+  optional int32 freq_cam2 = 5;
+  optional int32 idx_cam2 = 6;
+}
