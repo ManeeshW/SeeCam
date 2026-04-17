@@ -15,7 +15,7 @@ right_crop = 320
 top_crop = 180
 bottom_crop = 180
 
-CROP_STEP = 20                  # pixels changed per key press
+CROP_STEP = 1                  # pixels changed per key press
 MIN_CROP_MARGIN = 0             # can go down to zero
 CONFIG_FILE = "seecam_config.json"
 # =============================================
@@ -27,10 +27,10 @@ if os.path.exists(CONFIG_FILE):
     try:
         with open(CONFIG_FILE, 'r') as f:
             config = json.load(f)
-            left_crop = config.get("left_crop", 320)
-            right_crop = config.get("right_crop", 320)
-            top_crop = config.get("top_crop", 180)
-            bottom_crop = config.get("bottom_crop", 180)
+            left_crop = config.get("left_crop", 164)
+            right_crop = config.get("right_crop", 74)
+            top_crop = config.get("top_crop", 0)
+            bottom_crop = config.get("bottom_crop", 0)
         print(f"Loaded crop margins - Left:{left_crop} Right:{right_crop} Top:{top_crop} Bottom:{bottom_crop}")
     except:
         print("Could not load config, using defaults")

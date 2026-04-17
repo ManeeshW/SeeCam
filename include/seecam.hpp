@@ -1,6 +1,6 @@
+// ================== UPDATED seecam.hpp ==================
 #ifndef SEECAM_HPP
 #define SEECAM_HPP
-
 #include <opencv2/opencv.hpp>
 #include <zenoh.hxx>
 #include <string>
@@ -18,6 +18,7 @@
 #include <endian.h>
 #include <sstream>
 #include <iomanip>
+#include <optional>
 
 class SeeCam {
 private:
@@ -26,10 +27,12 @@ private:
     std::optional<zenoh::Publisher> pub;
     bool show_frame;
     int width, height, quality, zenoh_port;
+    int original_width, original_height;
+    int left_crop, right_crop, top_crop, bottom_crop;
     std::string zenoh_key;
     uint32_t sequence;
-    double last_publish_time; // Added for interval-based publishing
-    const double publish_interval = 0.1; // 100ms to match Python code
+    double last_publish_time;
+    const double publish_interval = 0.1;
 
     double get_timestamp();
     std::string get_local_ip();
@@ -44,5 +47,4 @@ public:
     ~SeeCam();
     void run();
 };
-
 #endif // SEECAM_HPP

@@ -1,4 +1,6 @@
+// ================== UPDATED seecam.cpp ==================
 #include "seecam.hpp"
+#include <algorithm>  // for std::max / std::min
 
 double SeeCam::get_timestamp() {
     return std::chrono::duration_cast<std::chrono::duration<double>>(
@@ -8,18 +10,15 @@ double SeeCam::get_timestamp() {
 std::string SeeCam::get_local_ip() {
     int sock = socket(PF_INET, SOCK_DGRAM, 0);
     if (sock == -1) return "Unknown";
-
     sockaddr_in loopback;
     std::memset(&loopback, 0, sizeof(loopback));
     loopback.sin_family = AF_INET;
     loopback.sin_addr.s_addr = inet_addr("8.8.8.8");
     loopback.sin_port = htons(80);
-
     if (connect(sock, (sockaddr*)&loopback, sizeof(loopback)) == -1) {
         close(sock);
         return "Unknown";
     }
-
     socklen_t len = sizeof(loopback);
     getsockname(sock, (sockaddr*)&loopback, &len);
     std::string ip = inet_ntoa(loopback.sin_addr);
@@ -37,12 +36,13 @@ bool SeeCam::load_config() {
     std::ifstream cfg("config.cfg");
     if (!cfg) {
         std::cout << "[ERROR] Failed to load config.cfg, using defaults" << std::endl;
-        width = 640;
-        height = 480;
-        quality = 80; // Match Python's JPEG quality (80)
+        original_width = 1920; original_height = 1200;
+        left_crop = 164; right_crop = 74; top_crop = 0; bottom_crop = 0;
+        width = 640; height = 480;
+        quality = 80;
         show_frame = false;
-        zenoh_key = "seecam/image"; // Match Python's key expression
-        zenoh_port = 4556; // Match Python's port
+        zenoh_key = "seecam/image";
+        zenoh_port = 4556;
         return false;
     }
 
@@ -57,57 +57,51 @@ bool SeeCam::load_config() {
         conf[key] = val;
     }
 
-    try {
-        width = std::stoi(conf["width"]);
-    } catch (...) {
-        width = 640;
-    }
-    try {
-        height = std::stoi(conf["height"]);
-    } catch (...) {
-        height = 480;
-    }
-    try {
-        quality = std::stoi(conf["compression_quality"]);
-    } catch (...) {
-        quality = 80; // Match Python's default
-    }
-    show_frame = (conf["SHOW_FRAME"] == "true");
-    zenoh_key = conf.count("zenoh_key") ? conf["zenoh_key"] : "seecam/image";
-    try {
-        zenoh_port = std::stoi(conf["zenoh_port"]);
-    } catch (...) {
-        zenoh_port = 4556;
-    }
+    try { original_width = std::stoi(conf["original_width"]); } catch (...) { original_width = 1920; }
+    try { original_height = std::stoi(conf["original_height"]); } catch (...) { original_height = 1200; }
+    try { left_crop = std::stoi(conf["left_crop"]); } catch (...) { left_crop = 164; }
+    try { right_crop = std::stoi(conf["right_crop"]); } catch (...) { right_crop = 74; }
+    try { top_crop = std::stoi(conf["top_crop"]); } catch (...) { top_crop = 0; }
+    try { bottom_crop = std::stoi(conf["bottom_crop"]); } catch (...) { bottom_crop = 0; }
+    try { width = std::stoi(conf["width"]); } catch (...) { width = 640; }
+    try { height = std::stoi(conf["height"]); } catch (...) { height = 480; }
+    try { quality = std::stoi(conf["compression_quality"]); } catch (...) { quality = 80; }
 
-    std::cout << "[INFO] Loaded config: resolution " << width << "x" << height
-              << ", compression quality " << quality << ", zenoh port " << zenoh_port << std::endl;
+    show_frame = (conf.count("SHOW_FRAME") && conf["SHOW_FRAME"] == "true");
+    zenoh_key = conf.count("zenoh_key") ? conf["zenoh_key"] : "seecam/image";
+    try { zenoh_port = std::stoi(conf["zenoh_port"]); } catch (...) { zenoh_port = 4556; }
+
+    std::cout << "[INFO] Loaded config: Capture " << original_width << "x" << original_height
+              << " | Crop L:" << left_crop << " R:" << right_crop
+              << " T:" << top_crop << " B:" << bottom_crop
+              << " → Output " << width << "x" << height << std::endl;
     return true;
 }
 
 cv::VideoCapture SeeCam::init_camera() {
-    bool use_gstreamer = true;
-    cv::VideoCapture c;
-    if (use_gstreamer) {
-        std::string gst_pipeline = "v4l2src device=/dev/video0 ! video/x-raw, width=" + std::to_string(width) +
-                                  ", height=" + std::to_string(height) + ", framerate=30/1 ! videoconvert ! appsink";
-        c.open(gst_pipeline, cv::CAP_GSTREAMER);
-        if (c.isOpened()) {
-            std::cout << "[INFO] Camera opened with GStreamer." << std::endl;
-            return c;
-        } else {
-            std::cout << "[WARN] Failed to open camera with GStreamer. Trying default method..." << std::endl;
-        }
+    // Exact GStreamer pipeline from Python viewer (high-res MJPEG)
+    std::string gst_pipeline = "v4l2src device=/dev/video0 ! image/jpeg,width=" +
+                               std::to_string(original_width) + ",height=" +
+                               std::to_string(original_height) +
+                               ",framerate=60/1 ! jpegdec ! videoconvert ! appsink";
+
+    cv::VideoCapture c(gst_pipeline, cv::CAP_GSTREAMER);
+    if (c.isOpened()) {
+        std::cout << "[INFO] Camera opened with GStreamer at " << original_width << "x" << original_height << std::endl;
+        return c;
     }
 
+    std::cout << "[WARN] GStreamer failed -> trying normal OpenCV V4L2..." << std::endl;
     c.open(0, cv::CAP_V4L2);
     if (c.isOpened()) {
-        std::cout << "[INFO] Camera opened with default OpenCV (V4L2 backend)." << std::endl;
-        return c;
+        c.set(cv::CAP_PROP_FRAME_WIDTH, original_width);
+        c.set(cv::CAP_PROP_FRAME_HEIGHT, original_height);
+        c.set(cv::CAP_PROP_FPS, 60);
+        std::cout << "[INFO] Camera opened with V4L2 backend." << std::endl;
     } else {
         std::cout << "[ERROR] Could not open camera." << std::endl;
     }
-    return cv::VideoCapture();
+    return c;
 }
 
 std::vector<uint8_t> SeeCam::encode_image(const cv::Mat& image) {
@@ -136,26 +130,24 @@ double SeeCam::get_memory_mb() {
     return 0.0;
 }
 
-SeeCam::SeeCam() : show_frame(false), width(640), height(480), quality(80), zenoh_port(4556), zenoh_key("seecam/image"), sequence(0), last_publish_time(0.0) {
+SeeCam::SeeCam() : show_frame(false), width(640), height(480), quality(80),
+                   zenoh_port(4556), zenoh_key("seecam/image"), sequence(0),
+                   last_publish_time(0.0),
+                   original_width(1920), original_height(1200),
+                   left_crop(164), right_crop(74), top_crop(0), bottom_crop(0) {
     load_config();
     set_jetson_performance();
-
     cap = init_camera();
     if (!cap.isOpened()) {
         std::cout << "[ERROR] Camera not opened." << std::endl;
         return;
     }
-    cap.set(cv::CAP_PROP_FRAME_WIDTH, width);
-    cap.set(cv::CAP_PROP_FRAME_HEIGHT, height);
-    cap.set(cv::CAP_PROP_FPS, 60);
-
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
     zenoh::Config zconfig = zenoh::Config::create_default();
     std::string endpoint = "udp/0.0.0.0:" + std::to_string(zenoh_port);
     zconfig.insert_json5("listen/endpoints", "[\"" + endpoint + "\"]");
     zconfig.insert_json5("scouting/multicast/enabled", "true");
-
     try {
         session.emplace(std::move(zconfig));
         std::cout << "[INFO] Zenoh session established" << std::endl;
@@ -163,7 +155,6 @@ SeeCam::SeeCam() : show_frame(false), width(640), height(480), quality(80), zeno
         std::cout << "[ERROR] Failed to establish Zenoh session: " << e.what() << std::endl;
         return;
     }
-
     try {
         pub.emplace(session->declare_publisher(zenoh_key));
         std::cout << "[INFO] Publisher declared on key: " << zenoh_key << std::endl;
@@ -171,7 +162,6 @@ SeeCam::SeeCam() : show_frame(false), width(640), height(480), quality(80), zeno
         std::cout << "[ERROR] Failed to declare publisher: " << e.what() << std::endl;
         return;
     }
-
     std::string publisher_ip = get_local_ip();
     std::cout << "[INFO] Publisher running on IP: " << publisher_ip << ":" << zenoh_port << std::endl;
 }
@@ -190,7 +180,6 @@ void SeeCam::run() {
         std::cout << "[ERROR] Publisher or session not initialized." << std::endl;
         return;
     }
-
     while (true) {
         cv::Mat frame;
         cap >> frame;
@@ -199,20 +188,27 @@ void SeeCam::run() {
             continue;
         }
 
-        // Optional cropping to match Python's im[80:-80, :, :] (crops top/bottom 80 rows)
-        // Uncomment to enable:
-        // if (frame.rows >= 160) {
-        //     frame = frame(cv::Rect(0, 80, frame.cols, frame.rows - 160));
-        // }
+        // ====================== CROP (exact match to Python viewer) ======================
+        int crop_w = original_width - left_crop - right_crop;
+        int crop_h = original_height - top_crop - bottom_crop;
+        crop_w = std::max(100, crop_w);
+        crop_h = std::max(100, crop_h);
 
-        if (frame.cols != width || frame.rows != height) {
-            cv::resize(frame, frame, cv::Size(width, height));
-            cv::cvtColor(frame, frame, cv::COLOR_BGR2RGB); // Match Python's RGB format
-            std::cout << "[INFO] Captured image size: " << frame.cols << "x" << frame.rows << std::endl;
-        }
+        // Safety clamp (prevents out-of-bounds like Python's clamp logic)
+        int x1 = std::max(0, std::min(left_crop, frame.cols - crop_w));
+        int y1 = std::max(0, std::min(top_crop, frame.rows - crop_h));
+
+        cv::Mat cropped = frame(cv::Rect(x1, y1, crop_w, crop_h));
+
+        // ====================== RESIZE TO 640x480 (exact match to Python) ======================
+        cv::Mat final_frame;
+        cv::resize(cropped, final_frame, cv::Size(width, height), 0, 0, cv::INTER_LINEAR);
+
+        // Match original C++ publisher RGB conversion
+        cv::cvtColor(final_frame, final_frame, cv::COLOR_BGR2RGB);
 
         if (show_frame) {
-            cv::imshow("Captured Frame", frame);
+            cv::imshow("SeeCam Publisher - " + std::to_string(width) + "x" + std::to_string(height), final_frame);
             if (cv::waitKey(1) == 'q') {
                 std::cout << "Pressed 'q'. Exiting..." << std::endl;
                 break;
@@ -221,17 +217,16 @@ void SeeCam::run() {
 
         double current_time = get_timestamp();
         if (current_time - last_publish_time < publish_interval) {
-            continue; // Skip publishing until 100ms interval is reached
+            continue;
         }
         last_publish_time = current_time;
 
-        auto encoded_image = encode_image(frame);
+        auto encoded_image = encode_image(final_frame);
         if (encoded_image.empty()) continue;
 
-        double timestamp = current_time; // Match Python's timestamp
+        double timestamp = current_time;
         uint32_t image_len = static_cast<uint32_t>(encoded_image.size());
 
-        // Construct message: sequence (uint32_t) + timestamp (double) + length (uint32_t) + image
         std::vector<uint8_t> message(sizeof(uint32_t) + sizeof(double) + sizeof(uint32_t) + image_len);
         uint8_t* ptr = message.data();
 
@@ -254,8 +249,7 @@ void SeeCam::run() {
 
         std::cout << std::fixed << std::setprecision(6)
                   << "[INFO] Published image #" << sequence << " at " << timestamp
-                  << ", Memory: " << get_memory_mb() << " MB" << std::endl;
-
+                  << " (" << width << "x" << height << "), Memory: " << get_memory_mb() << " MB" << std::endl;
         sequence++;
     }
 }
